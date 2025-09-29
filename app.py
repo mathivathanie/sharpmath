@@ -1,3 +1,4 @@
+```python
 # app.py
 import streamlit as st
 from PIL import Image, ImageOps
@@ -48,23 +49,30 @@ if tflite_available and os.path.exists(MODEL_PATH):
         output_details = interpreter.get_output_details()
         if os.path.exists(LABELS_PATH):
             with open(LABELS_PATH, "r") as f:
-                labels = [line.strip().lower() for line in f.readlines()]
+                raw_labels = [line.strip().lower() for line in f.readlines()]
+                labels = []
+                for lbl in raw_labels:
+                    parts = lbl.split(maxsplit=1)
+                    name = parts[1] if len(parts) > 1 else parts[0]
+                    if name == "pomogranate":
+                        name = "pomegranate"
+                    labels.append(name)
     except Exception:
         interpreter = None
 
-# ----- Nutrition DB for the exact labels user provided -----
-# Values approximate — demo purposes
+# ----- Nutrition DB -----
 NUTRITION_DB = {
     "apple": {"cal": 95, "protein": 0.5, "carbs": 25, "fat": 0.3, "fiber": 4},
     "half apple": {"cal": 48, "protein": 0.25, "carbs": 12.5, "fat": 0.15, "fiber": 2},
     "pomegranate": {"cal": 105, "protein": 1.7, "carbs": 26, "fat": 1.2, "fiber": 4},
     "goodday": {"cal": 120, "protein": 1.5, "carbs": 18, "fat": 5, "fiber": 1},
     "samosa": {"cal": 262, "protein": 4.3, "carbs": 30, "fat": 14, "fiber": 2},
+    "bingo": {"cal": 160, "protein": 2, "carbs": 15, "fat": 10, "fiber": 1},
 }
 HEALTHY = {"apple", "pomegranate", "half apple"}
 JUNK = set(NUTRITION_DB.keys()) - HEALTHY
 
-# ----- Session state (persist during the session) -----
+# ----- Session state -----
 if "profile_saved" not in st.session_state:
     st.session_state.profile_saved = False
 if "daily_quota" not in st.session_state:
@@ -80,7 +88,7 @@ if "last_scan" not in st.session_state:
 if "processed" not in st.session_state:
     st.session_state.processed = False
 
-# ----- Profile area (hidden after save) -----
+# ----- Profile area -----
 if not st.session_state.profile_saved:
     with st.form("profile_form", clear_on_submit=False):
         cols = st.columns([1,1,1])
@@ -92,7 +100,6 @@ if not st.session_state.profile_saved:
             age = st.number_input("Age", min_value=10, max_value=100, value=22)
         saved = st.form_submit_button("Save profile")
         if saved:
-            # Simple daily estimate: weight*30 (quick demo-friendly)
             total = max(1200, int(weight * 30))
             st.session_state.daily_quota = total
             st.session_state.remaining = total
@@ -101,21 +108,17 @@ if not st.session_state.profile_saved:
 
 # Main card
 st.markdown('<div class="card">', unsafe_allow_html=True)
-
 cols = st.columns([2,1])
 with cols[0]:
-    # camera_input (mobile friendly). It returns an uploaded file-like object.
     captured_file = st.camera_input("Tap to capture (recommended)")
     uploaded_file = st.file_uploader("Or upload image", type=["jpg","jpeg","png"])
 with cols[1]:
-    # gamified summary (compact)
     st.markdown("**Progress**")
     if st.session_state.daily_quota:
         used = st.session_state.daily_quota - (st.session_state.remaining or 0)
         pct = int((used / st.session_state.daily_quota) * 100) if st.session_state.daily_quota else 0
         st.progress(min(max(pct, 0), 100))
         st.metric("Remaining kcal", f"{st.session_state.remaining} kcal")
-        # XP & Level
         lvl = 1 + (st.session_state.xp // 50)
         st.metric("XP", f"{st.session_state.xp} (Level {lvl})")
     else:
@@ -128,11 +131,9 @@ st.write("")
 def tflite_predict(pil_img: Image.Image):
     if interpreter is None:
         return None
-    target = (input_details[0]["shape"][2], input_details[0]["shape"][1]) if len(input_details[0]["shape"]) >= 3 else (224,224)
-    # Many TM models are 224x224; try 224 fallback
+    target = (224, 224)
     try:
-        target = (224, 224)
-        img = ImageOps.fit(pil_img, target, Image.ANTIALIAS).convert("RGB")
+        img = ImageOps.fit(pil_img, target, Image.Resampling.LANCZOS).convert("RGB")
         arr = np.array(img) / 255.0
         input_data = np.expand_dims(arr.astype(np.float32), axis=0)
         interpreter.set_tensor(input_details[0]["index"], input_data)
@@ -145,40 +146,28 @@ def tflite_predict(pil_img: Image.Image):
     except Exception:
         return None
 
-# fallback classifier (filename heuristics)
+# fallback classifier
 def fallback_classify(fileobj):
-    name = ""
-    try:
-        name = getattr(fileobj, "name", "") or ""
-    except:
-        name = ""
+    name = getattr(fileobj, "name", "") or ""
     name = name.lower()
     for k in NUTRITION_DB:
         if k in name:
             return k, 0.9
-    # if nothing, try basic image heuristics: look for 'apple' in binary name else choose apple
     return "apple", 0.6
 
 # ----- Process capture / upload -----
-image_to_process = None
-if captured_file is not None:
-    image_to_process = captured_file
-elif uploaded_file is not None:
-    image_to_process = uploaded_file
+image_to_process = captured_file or uploaded_file
 
 if image_to_process and not st.session_state.profile_saved:
     st.warning("Save your profile first so we can track your daily calories.")
 elif image_to_process:
-    # prevent reprocessing unless user asks to scan again
     if not st.session_state.processed:
         st.info("Hold steady… gaze for 3 seconds", icon="👀")
         st.image(Image.open(image_to_process).convert("RGB"), caption="Preview", use_column_width=True)
-        # gaze countdown
         with st.spinner("Analyzing (3s)..."):
             for i in range(3, 0, -1):
                 st.write(f"Gaze: {i}…")
                 time.sleep(1)
-        # predict
         predicted = None
         if interpreter is not None and labels:
             res = tflite_predict(Image.open(image_to_process))
@@ -191,10 +180,8 @@ elif image_to_process:
         st.session_state.processed = True
         st.session_state.last_scan = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # display result (clean)
         st.markdown(f"### Detected: **{label.capitalize()}**  —  ({conf:.2f})")
 
-        # show nutrition (if in DB)
         if label in NUTRITION_DB:
             d = NUTRITION_DB[label]
             cols = st.columns([1,1])
@@ -206,7 +193,6 @@ elif image_to_process:
                 st.markdown(f"**Fat**: {d['fat']} g")
                 st.markdown(f"**Fiber**: {d['fiber']} g")
 
-            # update remaining & xp
             prev = st.session_state.remaining if st.session_state.remaining is not None else st.session_state.daily_quota
             new_remaining = prev - d["cal"]
             st.session_state.remaining = new_remaining
@@ -215,7 +201,6 @@ elif image_to_process:
             else:
                 st.session_state.xp += 12
 
-            # progress
             if st.session_state.daily_quota:
                 used = st.session_state.daily_quota - st.session_state.remaining
                 percent = int((used / st.session_state.daily_quota) * 100)
@@ -228,7 +213,6 @@ elif image_to_process:
                 "time": st.session_state.last_scan, "food": label, "cal": None, "remaining": st.session_state.remaining
             })
 
-        # time-aware tip and popup behaviour
         now = datetime.datetime.now()
         hour = now.hour
         if hour < 11:
@@ -240,7 +224,6 @@ elif image_to_process:
         else:
             tod = "night"; suggested = "It's late — keep choices light and low-cal."
 
-        # Junk vs healthy feedback with gamified animations
         if label in JUNK:
             quotes = [
                 "Crunchy now, couch-bound later — consider a swap next time! 😅",
@@ -251,7 +234,6 @@ elif image_to_process:
             st.write(f"**{random.choice(quotes)}**")
             st.info(f"Tip for the {tod}: {suggested}")
             st.session_state.history.append({"time": st.session_state.last_scan, "food": label, "cal": NUTRITION_DB.get(label, {}).get("cal"), "remaining": st.session_state.remaining})
-            # playful animation (snow) for junk (funny/attention-getting)
             st.snow()
         else:
             st.success("✅ Good choice — this helps your goals!", icon="✅")
@@ -261,19 +243,14 @@ elif image_to_process:
             st.balloons()
             st.session_state.history.append({"time": st.session_state.last_scan, "food": label, "cal": NUTRITION_DB.get(label, {}).get("cal"), "remaining": st.session_state.remaining})
 
-        # show compact history & quick actions
         st.markdown("### Recent")
         for h in reversed(st.session_state.history[-5:]):
             cal_text = f"{h['cal']} kcal" if h.get("cal") else "—"
             st.write(f"- {h['time'].split(' ')[1]}  •  {h['food'].capitalize()}  •  {cal_text}  •  remaining {h['remaining']}")
 
-        # scan again button (clears processed flag so user can capture again)
         if st.button("🔁 Scan another"):
             st.session_state.processed = False
-            # refresh UI — let the user capture again
             st.experimental_rerun()
-
-# If nothing captured and profile saved, friendly micro-instruction
 if not image_to_process and st.session_state.profile_saved:
     st.markdown("<div class='small-muted'>Tap the camera button above to simulate the smart-glasses scan.</div>", unsafe_allow_html=True)
 

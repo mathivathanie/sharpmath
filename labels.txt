@@ -1,5 +1,6 @@
-0 goodday
-1 chips 
-2 apple
-3 bingo
-4 kurkure
+0 apple
+1 goodday
+2 bingo
+3 half apple
+4 samosa
+5 pomogranate
