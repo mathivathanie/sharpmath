@@ -1,0 +1,5 @@
+0 goodday
+1 chips 
+2 apple
+3 bingo
+4 kurkure
