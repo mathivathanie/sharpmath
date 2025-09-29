@@ -1,5 +1,3 @@
-```python
-# app.py
 import streamlit as st
 from PIL import Image, ImageOps
 import numpy as np
